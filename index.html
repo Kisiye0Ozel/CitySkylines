@@ -6,34 +6,76 @@
     <title>Pixel City Tycoon - Yandex Games</title>
     <script src="https://yandex.net/games/sdk/v2"></script>
     <style>
-        body { margin: 0; background: #222; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; overflow: hidden; font-family: 'Courier New', monospace; }
+        body { 
+            margin: 0; background: #2c3e50; display: flex; flex-direction: column; 
+            align-items: center; justify-content: center; height: 100vh; overflow: hidden; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+        }
+        
+        /* Üst Bilgi Paneli (HUD) */
+        #hud {
+            position: absolute; top: 20px;
+            background: rgba(0, 0, 0, 0.8); color: #f1c40f;
+            padding: 15px 30px; border-radius: 12px; border: 2px solid #f39c12;
+            font-size: 20px; font-weight: bold; display: flex; gap: 30px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5); z-index: 10;
+            text-shadow: 1px 1px 2px #000;
+        }
+        .income-text { color: #2ecc71; font-size: 16px; }
+
         canvas { 
-            border: 4px solid #444; 
-            image-rendering: pixelated; /* Pixel art için kritik */
-            max-width: 95vw; max-height: 80vh;
-            cursor: crosshair;
+            border: 4px solid #34495e; border-radius: 8px;
+            image-rendering: pixelated; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            cursor: crosshair; background: #222;
         }
-        #ui { margin-top: 15px; display: flex; gap: 10px; }
+        
+        /* Alt Kontrol Paneli */
+        #ui { margin-top: 20px; display: flex; gap: 15px; }
         button {
-            padding: 10px 20px; border: none; border-radius: 4px; color: white;
-            font-weight: bold; cursor: pointer; text-transform: uppercase;
-            box-shadow: 0 4px 0 #333;
+            padding: 12px 20px; border: none; border-radius: 8px; color: white;
+            font-weight: bold; font-size: 16px; cursor: pointer; 
+            display: flex; flex-direction: column; align-items: center; gap: 5px;
+            box-shadow: 0 5px 0 rgba(0,0,0,0.3); transition: 0.1s;
         }
-        button:active { transform: translateY(2px); box-shadow: 0 2px 0 #333; }
-        .btn-house { background: #e67e22; }
-        .btn-tree { background: #27ae60; }
+        button span { font-size: 12px; opacity: 0.9; }
+        button:active { transform: translateY(5px); box-shadow: none; }
+        
+        .btn-house { background: #e74c3c; }
         .btn-road { background: #7f8c8d; }
-        .active { outline: 3px solid white; }
+        .btn-tree { background: #27ae60; }
+        .active { outline: 3px solid #fff; outline-offset: 2px; }
+        
+        /* Uyarı Animasyonu */
+        @keyframes shake {
+            0% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            50% { transform: translateX(5px); }
+            75% { transform: translateX(-5px); }
+            100% { transform: translateX(0); }
+        }
+        .error { animation: shake 0.3s ease-in-out; color: #e74c3c !important; }
     </style>
 </head>
 <body>
 
+<div id="hud">
+    <div>💰 Para: <span id="moneyDisplay">200</span></div>
+    <div class="income-text">📈 Gelir: +<span id="incomeDisplay">0</span>/sn</div>
+</div>
+
 <canvas id="gameCanvas"></canvas>
 
 <div id="ui">
-    <button id="houseBtn" class="btn-house active" onclick="setMode('house')">EV</button>
-    <button id="roadBtn" class="btn-road" onclick="setMode('road')">YOL</button>
-    <button id="treeBtn" class="btn-tree" onclick="setMode('tree')">AĞAÇ</button>
+    <button id="houseBtn" class="btn-house active" onclick="setMode('house')">
+        EV <span>(50💰)</span>
+    </button>
+    <button id="roadBtn" class="btn-road" onclick="setMode('road')">
+        YOL <span>(10💰)</span>
+    </button>
+    <button id="treeBtn" class="btn-tree" onclick="setMode('tree')">
+        AĞAÇ <span>(5💰)</span>
+    </button>
 </div>
 
 <script>
@@ -43,105 +85,140 @@
         ysdk.features.LoadingProgress.report(100);
     });
 
+    // --- Core Canvas Ayarları ---
     const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext('2d', { alpha: false }); // Performans artışı
     
     const TILE_SIZE = 32;
-    const GRID_SIZE = 20; // 20x20 Harita
+    const GRID_SIZE = 22; 
     canvas.width = TILE_SIZE * GRID_SIZE;
     canvas.height = TILE_SIZE * GRID_SIZE;
 
+    // --- Oyun Değişkenleri (Ekonomi) ---
+    let money = 200;
+    let incomePerSecond = 0;
     let currentMode = 'house';
     let map = [];
 
-    // --- Renk Paleti (Pixel Art Tonları) ---
-    const COLORS = {
-        grass: '#55aa55',
-        water: '#4488ff',
-        sand: '#eedd88',
-        house: '#cc4444',
-        road: '#444444',
-        tree: '#226622'
+    const BUILDINGS = {
+        house: { cost: 50, income: 5, color: '#e74c3c' },
+        road:  { cost: 10, income: 0, color: '#7f8c8d' },
+        tree:  { cost: 5,  income: 1, color: '#27ae60' } // Ağaçlar az da olsa turizm/mutluluk geliri verir
     };
 
-    // --- Harita Oluşturma ---
+    const COLORS = {
+        grass: '#2ecc71', water: '#3498db', sand: '#f1c40f'
+    };
+
+    // --- HUD Güncelleme ---
+    function updateHUD(isError = false) {
+        const moneyEl = document.getElementById('moneyDisplay');
+        moneyEl.innerText = money;
+        document.getElementById('incomeDisplay').innerText = incomePerSecond;
+        
+        if (isError) {
+            moneyEl.parentElement.classList.add('error');
+            setTimeout(() => moneyEl.parentElement.classList.remove('error'), 300);
+        }
+    }
+
+    // --- Harita Üretimi ---
     function initMap() {
         for (let y = 0; y < GRID_SIZE; y++) {
             map[y] = [];
             for (let x = 0; x < GRID_SIZE; x++) {
                 let r = Math.random();
-                if (r < 0.1) map[y][x] = { type: 'water' };
-                else if (r < 0.15) map[y][x] = { type: 'sand' };
+                if (r < 0.12) map[y][x] = { type: 'water' };
+                else if (r < 0.18) map[y][x] = { type: 'sand' };
                 else map[y][x] = { type: 'grass' };
             }
         }
     }
 
-    // --- Çizim Fonksiyonu ---
+    // --- Çizim Motoru ---
     function draw() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-
         for (let y = 0; y < GRID_SIZE; y++) {
             for (let x = 0; x < GRID_SIZE; x++) {
                 const tile = map[y][x];
-                
-                // Zemini Çiz
-                ctx.fillStyle = COLORS[tile.type] || COLORS.grass;
-                ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                const px = x * TILE_SIZE;
+                const py = y * TILE_SIZE;
 
-                // Izgara Çizgileri (Hafif)
-                ctx.strokeStyle = 'rgba(0,0,0,0.05)';
-                ctx.strokeRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                // Zemin
+                ctx.fillStyle = COLORS[tile.type];
+                ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
 
-                // Eğer üzerinde yapı varsa çiz
+                // Grid Çizgileri
+                ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+                ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
+
+                // Binalar
                 if (tile.building) {
-                    drawBuilding(x, y, tile.building);
+                    ctx.fillStyle = BUILDINGS[tile.building].color;
+                    if (tile.building === 'house') {
+                        ctx.fillRect(px + 4, py + 8, TILE_SIZE - 8, TILE_SIZE - 12); // Gövde
+                        ctx.fillStyle = '#c0392b'; ctx.fillRect(px + 4, py + 4, TILE_SIZE - 8, 8); // Çatı
+                        ctx.fillStyle = '#f1c40f'; ctx.fillRect(px + 8, py + 16, 6, 6); // Işıklı Pencere
+                    } else if (tile.building === 'road') {
+                        ctx.fillRect(px, py + 8, TILE_SIZE, 16);
+                        ctx.fillStyle = '#bdc3c7'; ctx.fillRect(px + TILE_SIZE/2 - 2, py + 14, 4, 4); // Şerit
+                    } else if (tile.building === 'tree') {
+                        ctx.fillStyle = '#8e44ad'; ctx.fillRect(px + 12, py + 16, 8, 16); // Gövde
+                        ctx.fillStyle = BUILDINGS.tree.color; ctx.fillRect(px + 4, py + 4, 24, 16); // Yaprak
+                    }
                 }
             }
         }
     }
 
-    function drawBuilding(x, y, type) {
-        const px = x * TILE_SIZE;
-        const py = y * TILE_SIZE;
-        ctx.fillStyle = COLORS[type];
-
-        if (type === 'house') {
-            // Basit Pixel Ev
-            ctx.fillRect(px + 4, py + 8, TILE_SIZE - 8, TILE_SIZE - 12);
-            ctx.fillStyle = '#333'; // Kapı
-            ctx.fillRect(px + 12, py + 20, 8, 8);
-        } else if (type === 'road') {
-            ctx.fillRect(px, py + 10, TILE_SIZE, 12);
-        } else if (type === 'tree') {
-            ctx.fillStyle = '#442211'; // Gövde
-            ctx.fillRect(px + 14, py + 20, 4, 8);
-            ctx.fillStyle = COLORS.tree; // Yapraklar
-            ctx.fillRect(px + 8, py + 4, 16, 16);
-        }
-    }
-
-    // --- Etkileşim ---
-    canvas.addEventListener('click', (e) => {
+    // --- İnşa Etkileşimi ---
+    canvas.addEventListener('mousedown', (e) => {
         const rect = canvas.getBoundingClientRect();
-        const x = Math.floor((e.clientX - rect.left) / (rect.width / GRID_SIZE));
-        const y = Math.floor((e.clientY - rect.top) / (rect.height / GRID_SIZE));
+        // Mouse koordinatlarını canvas ölçeğine göre doğru hesapla
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        const x = Math.floor(((e.clientX - rect.left) * scaleX) / TILE_SIZE);
+        const y = Math.floor(((e.clientY - rect.top) * scaleY) / TILE_SIZE);
 
-        if (map[y][x].type !== 'water') {
-            map[y][x].building = currentMode;
-            draw();
+        // Sınır kontrolü
+        if(x >= 0 && x < GRID_SIZE && y >= 0 && y < GRID_SIZE) {
+            const tile = map[y][x];
+            const cost = BUILDINGS[currentMode].cost;
+
+            // Suya veya zaten bina olan yere yapılamaz
+            if (tile.type === 'water' || tile.building) return;
+
+            // Para kontrolü
+            if (money >= cost) {
+                money -= cost;
+                tile.building = currentMode;
+                incomePerSecond += BUILDINGS[currentMode].income;
+                updateHUD();
+                draw();
+            } else {
+                updateHUD(true); // Paran yetersiz animasyonu
+            }
         }
     });
 
     window.setMode = (mode) => {
         currentMode = mode;
-        document.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('#ui button').forEach(b => b.classList.remove('active'));
         document.getElementById(mode + 'Btn').classList.add('active');
     };
+
+    // --- Oyun Döngüsü (Game Loop) ---
+    // Her saniye geliri paraya ekle
+    setInterval(() => {
+        if (incomePerSecond > 0) {
+            money += incomePerSecond;
+            updateHUD();
+        }
+    }, 1000);
 
     // Başlat
     initMap();
     draw();
+    updateHUD();
 
 </script>
 </body>
